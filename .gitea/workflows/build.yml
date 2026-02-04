@@ -1,16 +1,53 @@
-name: Build
+name: Build Mod and Release Mod
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    tags: [ 'v*' ]  # 标签推送时触发发布
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read-version.outputs.version }}
+      release_name: ${{ steps.read-version.outputs.release_name }}
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # 发布时需要完整历史获取标签
           fetch-tags: true
+
+      - name: Read version from gradle.properties
+        id: read-version
+        run: |
+          # 从 gradle.properties 读取版本
+          if [ -f "gradle.properties" ]; then
+            VERSION=$(grep -E "^mod_version=" gradle.properties | cut -d'=' -f2 | tr -d '\r\n')
+            if [ -z "$VERSION" ]; then
+              VERSION=$(grep -E "^version=" gradle.properties | cut -d'=' -f2 | tr -d '\r\n')
+            fi
+          elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+            # 尝试从 build.gradle 读取
+            VERSION=$(grep -E "version\s*=" build.gradle* | head -1 | sed -E "s/.*version\s*=\s*['\"]?([^'\"]+)['\"]?/\1/" | tr -d '\r\n')
+          fi
+          
+          # 去除可能的空格和引号
+          VERSION=$(echo $VERSION | xargs)
+          
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: Could not find version in gradle.properties or build.gradle"
+            exit 1
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_name=Release v$VERSION" >> $GITHUB_OUTPUT
+          echo "Found version: $VERSION"
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
@@ -21,10 +58,70 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # This is needed to be able to run ./gradlew below
-      # You can run `git update-index --chmod +x gradlew` then remove this step.
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
       - name: Build with Gradle
         run: ./gradlew build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-outputs
+          path: |
+            **/build/libs/*.jar
+            **/build/distributions/
+          retention-days: 30
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    # 只在推送标签时创建 Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-outputs
+          path: ./artifacts
+
+      - name: Read version from gradle.properties
+        id: read-version
+        run: |
+          VERSION=$(grep -E "^mod_version=" gradle.properties | cut -d'=' -f2 | tr -d '\r\n')
+          if [ -z "$VERSION" ]; then
+            VERSION=$(grep -E "^version=" gradle.properties | cut -d'=' -f2 | tr -d '\r\n')
+          fi
+          VERSION=$(echo $VERSION | xargs)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.read-version.outputs.version }}
+          release_name: Release v${{ steps.read-version.outputs.version }}
+          body: |
+            ## Release v${{ steps.read-version.outputs.version }}
+            
+            ### Changes
+            - 更新内容待填写
+            
+            ### 下载
+            附件包含构建产物
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/**/*.jar
+            artifacts/**/*.zip
+            artifacts/**/*.tar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHU_TOKEN }}
