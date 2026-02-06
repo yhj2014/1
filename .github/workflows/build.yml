@@ -86,28 +86,6 @@ jobs:
           name: build-outputs
           path: ./artifacts
 
-      - name: Get changes log since last tag
-        id: get-changelog
-        run: |
-          # 获取上一个 tag
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
-          if [ -z "$LATEST_TAG" ]; then
-            # 如果没有 tag，获取所有提交
-            CHANGELOG=$(git log --oneline --pretty=format:"- %s" -20)
-            echo "changelog=## 首次发布\n\n$CHANGELOG" >> $GITHUB_OUTPUT
-          else
-            # 获取从上个 tag 到现在的提交
-            CHANGELOG=$(git log --oneline --pretty=format:"- %s" "${LATEST_TAG}..HEAD")
-            if [ -z "$CHANGELOG" ]; then
-              CHANGELOG="### 常规更新和优化"
-            fi
-            echo "changelog=$CHANGELOG" >> $GITHUB_OUTPUT
-          fi
-          
-          echo "Previous tag: $LATEST_TAG"
-          echo "New tag: v${{ needs.build.outputs.version }}"
-
       - name: Get current timestamp
         id: get-timestamp
         run: |
@@ -121,19 +99,6 @@ jobs:
         with:
           tag_name: v${{ needs.build.outputs.version }}
           name: Release v${{ needs.build.outputs.version }}
-          body: |
-            ## 版本 v${{ needs.build.outputs.version }}
-            
-            ### 更新内容
-            ${{ steps.get-changelog.outputs.changelog }}
-            
-            ### 构建信息
-            - **分支**: ${{ github.ref_name }}
-            - **提交**: ${{ github.sha }}
-            - **构建时间**: ${{ steps.get-timestamp.outputs.timestamp }}
-            
-            ### 使用说明
-            请下载对应的 jar 文件放入 mods 文件夹。
           draft: false
           prerelease: ${{ github.ref != 'refs/heads/main' }}
           generate_release_notes: true  # 让 GitHub 自动生成 Release notes
